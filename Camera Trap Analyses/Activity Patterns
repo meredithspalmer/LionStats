@@ -1,0 +1,92 @@
+#####################################################
+# Predator-prey activity patterns from camera traps #
+#####################################################
+
+# NOTE: lion is a bad example for a predator because of biased attraction to camera trap sites during mid-day (see Cusack et al. 2015)
+
+## Using kernel density functions to yield a continuous measure of the density of data points across their scale  
+## Package 'overlap'
+
+# set workspace 
+library(overlap); library(lubridate)
+rm(list=ls())
+setwd("C:/Users/palme516/Desktop/Grad School/Lions/Databases/CT_Official")
+
+# load all data 
+dat <- read.csv("unique_consensus_1.9.csv")
+dat <- dat[c("DateTime", "Species")]
+dat$time <- (hour(dat$DateTime)*60 + minute(dat$DateTime))/(24*60)
+dat$radtime <- dat$time * 2 * pi
+
+# for lions
+f_lion <- dat[dat$Species == "lionFemale",]$radtime
+m_lion <- dat[dat$Species == "lionMale",]$radtime
+lion <- dat[dat$Species %in% c("lionFemale", "lionMale"),]$radtime
+
+densityPlot(f_lion, rug=TRUE)
+densityPlot(m_lion, rug=TRUE)
+densityPlot(lion, rug=TRUE)
+
+# for herbivores
+Warthog <- dat[dat$Species == "warthog",]$radtime
+Gazelle <- dat[dat$Species == "gazelleThomsons",]$radtime
+Wildebeest <- dat[dat$Species == "wildebeest",]$radtime
+Zebra <- dat[dat$Species == "zebra",]$radtime
+Buffalo <- dat[dat$Species == "buffalo",]$radtime
+Giraffe <- dat[dat$Species == "giraffe",]$radtime
+
+densityPlot(Warthog, rug=TRUE) 
+densityPlot(Gazelle, rug=TRUE) 
+densityPlot(Wildebeest, rug=TRUE) 
+densityPlot(Zebra, rug=TRUE) 
+densityPlot(Buffalo, rug=TRUE) 
+densityPlot(Giraffe, rug=TRUE) 
+
+# predator-prey overlap
+overlapPlot(lion, Zebra, main="Lion & Zebra Activity")
+legend('topright', c("Lion", "Zebra"), lty=c(1,2), col=c(1,4), bty='n')
+
+# quantifying overlap 
+# == coefficient of overalp with root-mean-square-error [RMSE] estimator
+(lionzebest <- overlapEst(lion, Zebra, type="Dhat4"))
+
+# bootstrapping overlap + confidence intervals 
+# == fit a kernel density to the original data then draw random simulated observations from this distribution
+lionboot <- resample(lion, 1000)
+zebboot <- resample(Zebra, 1000)
+lionzebboot <- bootEst(lionboot, zebboot, type="Dhat4")
+(BSmean <- mean(lionzebboot)) #bootstrapped mean overlap
+
+bootCI(lionboot, zebboot) #use 'basic0' output as your CI
+
+
+## Fitting non-linear splines using generalized additive mixed-modelling 
+## Package 'mgcv' 
+
+# set workplace 
+library(mgcv); library(lubridate); library(plyr)
+rm(list=ls())
+setwd("C:/Users/palme516/Desktop/Grad School/Lions/Databases/CT_Official")
+
+# load all data 
+dat <- read.csv("unique_consensus_1.9.csv")
+zeb <- dat[dat$Species == "zebra",]
+zeb$hour <- hour(zeb$DateTime)
+
+# summarize data by site and hour 
+zeb <- ddply(zeb, .(SiteID, hour), summarise, 
+             count = sum(Count),
+             avgcount = mean(Count))
+# NOTE: Bischof et al. 2014 uses total number of independent visits associated with each hour of the day (0-23); but does it make sense to use average visits instead? depends on how incorporate search effort? 
+
+m1 <- gamm(count ~ s(hour), random = list(SiteID=~1), family = poisson, data = zeb)
+summary(m1$lme) #details of underlying lme fit
+summary(m1$gam) #gam-style summary of fitted model 
+plot(m1$gam) 
+
+
+## Other options 
+
+# R package 'Circular' (Agostinelli & Lund 2013) 
+# R package 'CircStats' (Lund & Agostinelli 2007)
+# R package 'activity' (Rowcliffe 2016)
