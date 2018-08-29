@@ -1,0 +1,95 @@
+#########################################################
+## Extracting 'unique' sightings from camera trap data ## 
+#########################################################
+
+# i.e., removing pictures of same animals hanging around in front of camera trap 
+
+# set workspace 
+setwd("C:/Users/palme516/Desktop/Grad School/Lions/Databases/CT_Official")
+rm(list=ls())
+library(plyr)
+
+# load and format data 
+dat <- read.csv("Old or Single Season/S9Classifications.csv")
+dat$CaptureEventID <- as.character(consensus$CaptureEventID)
+dat$DateTime <- strptime(dat$DateTime, "%m/%d/%y %H:%M")
+names(dat)[3] <- "Site"
+dat$unique_id <- paste(dat$Season, dat$Site, sep="_")
+
+# fix binned counts to be actual numbers (11-50, 51+ to 30, 75 respectively)
+dat$Count <- as.character(dat$Count)
+dat[dat$Count == "51",]$Count <- "75"
+dat[dat$Count == "11",]$Count <- "30"
+dat$Count <- as.numeric(as.character(dat$Count))
+
+# set up for loop 
+ssr <- unique(as.character(dat$unique_id))  #unique Season, Site, Roll combinations 
+mintime <- 10 # == number of minutes assumed independent
+
+all_images <- NULL #empty vector
+consensus <- NULL #empty vector
+gooddat <- NULL #empty vector 
+xunique <- NULL  #make empty vector to start unique dataframe
+xnew <- NULL  #empty new vector to gather data to append to xunique after each loop
+PictureGroup <- 0 #counter 
+
+# loop -- can take a long time to run! 
+for(k in 1:length(ssr)){
+  sub <- dat[dat$unique_id == ssr[k],]   #subset all rows of particular ssr 
+  spp <- unique(as.character(sub$Species))   #find all species in that subset 
+  
+  for (j in 1:length(spp)){
+    x <- sub[sub$Species == spp[j],]   #further subset data by species 
+    PictureGroup=PictureGroup+1
+    if(nrow(x) == 1){
+      x$TimeDiff = 999
+      x$PictureGroup = PictureGroup
+      x$repID = 1
+      gooddat=rbind(gooddat,x) 
+      next
+    }
+    
+    #make sure data are in order
+    x=x[order(x$DateTime),]
+    
+    #calculate time differences
+    x$TimeDiff=c(999,difftime(x$DateTime[-1],x$DateTime[1:(nrow(x)-1)],units="mins"))
+    
+    #assign starting groupIDs and record initial counts
+    x$PictureGroup=PictureGroup
+    x$repID=1
+    maxcount=x$Count[1]   
+    maxcountloc=1
+    maxcountvec=NULL
+    
+    for(i in 2:nrow(x)){
+      if(x$TimeDiff[i]>mintime){
+        #increment group number, record number of animals seen
+        PictureGroup=PictureGroup+1
+        maxcountvec=c(maxcountvec,maxcountloc)
+        x$PictureGroup[i]=PictureGroup
+        maxcount=x$Count[i]
+        maxcountloc=i
+      }else{
+        #copy group number, increment repID, test for larger count of animals
+        x$PictureGroup[i]=PictureGroup
+        x$repID[i]=x$repID[i-1]+1
+        if(x$Count[i]>maxcount){
+          maxcount=x$Count[i]
+          maxcountloc=i
+        }
+      }
+    }
+    #append data in output dataframe
+    maxcountvec=c(maxcountvec,maxcountloc)
+    gooddat=rbind(gooddat,x[maxcountvec,]) 
+  }
+}
+
+gooddat$unique_id <- NULL
+gooddat$TimeDiff <- NULL
+gooddat$PictureGroup <- NULL
+gooddat$repID <- NULL
+head(gooddat)
+
+write.csv(gooddat,"unique_consensus_s9.csv", row.names=F)
