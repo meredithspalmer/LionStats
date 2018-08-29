@@ -1,0 +1,63 @@
+############################################### 
+# Calculating 'search effort' from CT records #
+###############################################
+
+# record of number of days, hours, etc. that camera traps operational based on first and last dates of images taken in each camera check
+
+# set workspace
+setwd("C:/Users/palme516/Desktop/Grad School/Lions/CT_Cleaning/Data/Captures")
+rm(list=ls())
+library(plyr)
+
+# upload snapshot data with images linked to dates
+dat_1 <- read.csv("S1_captures.csv",header=TRUE)
+dat_1$TimestampJPG <- strptime(dat_1$TimestampJPG, "%Y:%m:%d %H:%M:%S")
+dat_1 <- dat_1[c("Season","Site","Roll","TimestampJPG")]
+
+# make sure no weird timestamps (for this season, would be before 2009 or after 2011)
+y <- as.numeric(rownames(dat_1[((format(dat_1$TimestampJPG, "%Y") < 2010) | 
+                                 (format(dat_1$TimestampJPG, "%Y") > 2012)),]))
+nrow(y)
+dat_1 <- dat_1[-y,]
+
+
+## Find start and stop dates for each roll based on when first and last picture taken
+
+# make unique identifier  
+dat_1$SRC <- paste(dat_1$Season, "_", dat_1$Site, "_", dat_1$Roll, sep="")  
+dat_1 <- dat_1[order(dat_1$Season, dat_1$Site, dat_1$Roll),]                            
+
+# format data for summarizing -- make sure all timestamps think that they are in the same time zone (doesn't matter which time zone this is) 
+dat_1$TimestampJPG <- as.character(dat_1$TimestampJPG)
+dat_1$TimestampJPG <- as.POSIXct(strptime(dat_1$TimestampJPG, "%Y-%m-%d %H:%M:%S"), tz="GMT")
+
+# summarize data: take start and stop date for each season/site/roll combo 
+dat_1_sum <- ddply(dat_1, "SRC", summarise,
+                    StartDate = min(TimestampJPG), 
+                    StopDate = max(TimestampJPG))
+
+# write csv 
+write.csv(dat_1_sum,"siterolleffort_S1.csv", row.names=FALSE)
+
+
+## Create dataframe with line for each day CT active (expand previous dataframe)
+
+# turn to dates instead of date-times
+dat_1_sum$StartDate <- strptime(dat_1_sum$StartDate, "%Y-%m-%d")
+dat_1_sum$StopDate <- strptime(dat_1_sum$StopDate, "%Y-%m-%d")
+
+# make site identifier 
+dat_1_sum$SiteID <- substr(dat_1_sum$SRC,3,5)
+
+#create df of all dates operational
+df <- NULL
+for(i in 1:nrow(dat_1_sum)){
+  x <- seq(dat_1_sum$StartDate[i], dat_1_sum$StopDate[i], by="days")
+    #can change 'by' argument to "hours" if want hourly df 
+  y <- rep(dat_1_sum$SiteID[i], length(x))
+  tempdf <- as.data.frame(cbind(as.character(x), as.character(y)))
+  df <- rbind(df, tempdf)
+}
+df <- df[,c(2,1)]; names(df)[c(1,2)] <- c("SiteID","Date")  
+
+write.csv(df, "siterolleffort_S1_expanded.csv", row.names=F)
