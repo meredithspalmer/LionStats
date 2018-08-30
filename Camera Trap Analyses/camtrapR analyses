@@ -1,0 +1,564 @@
+############################################
+## Utility of camtrap R for Snapshot data ##
+############################################
+
+setwd("C:/Users/palme516/Desktop/Grad School/Lions/Databases/CT_Official")
+rm(list=ls())
+library(camtrapR); library(dplyr)
+
+## Five main functions of camtrapR package: 
+
+# 1) Image organization and management 
+#       - setting up directory structure for storing raw images
+#       - renaming images by station ID, date, and time
+# --> these issues carried out by Snapshot Safari team, not necessary here 
+
+# 2) Species/individual identification 
+#       - metadata tagging or drag and drop
+#       - appending species names to files 
+# --> also not relevant here, provided in data from Snapshot Safari team 
+
+# 3) Image data extraction
+#       - tablulations of species records 
+#       - extraction of image metadata 
+# --> again, not super revelant; HOWEVER, had to hack some of this code to be able to produce the type of dataframe needed for subsequent camtrapR analyses
+
+# 4) Data exploration 
+#       - visualization of spatial species occurrence patterns
+#       - export to GIS software
+#       - single- and two-species activity patterns
+
+# 5) Data export
+#       - prep input files for occupancy and (SE)CR frameworks
+#       - generation of survey summary reports
+
+
+##############################################################
+## Camera trap station information 
+##############################################################
+
+#########################
+## cam trap data frame ##
+#########################
+
+## Create (manually) dataframe with camera trap stations and individual cameras
+#  - station/camera IDs (one row per station or one row per camera if >1 cameras per station) 
+#  - geographic coordinates
+#  - setup and retrieval dates
+#  - possible dates when cameras were not operational (b/c malfunction, animal interference, empty batteries, fully memory card, etc.)
+#  - station-level covariates
+
+# sample data
+data("camtraps")
+head(camtraps)
+
+## NOTE: problem for us is that we have multiple retrieval dates and periods of time when cameras are not online; we can get around this by adding additional pairs of columns (e.g., 'Problem2_from', 'Problem2_to') to designate offline periods between camera checks (in addition to intendend use, which is to designate periods when cameras malfunctioning or broken)
+  
+# snapshot sample data: read in file made from "MSP_formatting_for_camtrapR.R" 
+camtraps_snapshot <- read.csv("camtraps_snapshot.csv")
+
+# NOTES:
+#  - all data types should be 'character' 
+str(camtraps_snapshot)
+camtraps_snapshot <- camtraps_snapshot %>% mutate_all(as.character)
+
+#  - all data types should be formatted in any way that function 'as.Date' can interpret (but stored in data frames as 'character' not 'date'); camtrapR assumes standard format 'YYYY-MM-DD' 
+#  --> this should be good already if used MSP_formatting_for_camtrapR.R, but double check and fix if need
+
+
+######################
+## camera operation ##
+######################
+
+#  - create camera operation matrix (days x stations): states how many cameras were active at a station on a given day
+#  - rows represent stations, columns represent days 
+
+# easier to see with their data (smaller dataframe) 
+data(camtraps)
+camop_problem <- cameraOperation(CTtable = camtraps,
+                                 stationCol = "Station",
+                                 setupCol = "Setup_date",
+                                 retrievalCol = "Retrieval_date",
+                                 writecsv = FALSE,
+                                 hasProblems = TRUE,
+                                 dateFormat = "%d/%m/%Y") 
+
+# but here it is with our data too
+camop_problem.snap <- cameraOperation(CTtable = camtraps_snapshot, #changed this
+                                 stationCol = "Station",
+                                 setupCol = "Setup_date",
+                                 retrievalCol = "Retrieval_date",
+                                 writecsv = FALSE,
+                                 hasProblems = TRUE,
+                                 dateFormat = "%Y-%m-%d") #changed this 
+
+#  - if camera is not set up, value is NA; if camear set up but malfunctioning, value is 0 
+#  --> NOTE: this possible issue for us, b/c we marked cameras between checks as "malfunctioning", so those values that you might want to consider as NAs are marked as 0s. if you wanted to fix, do manually or use: 
+camop_problem.snap[camop_problem.snap == 0] <- NA
+
+# plot camera operation matrix (to look for types/other problems)
+camopPlot <- function(camOp){
+  
+  which.tmp <- grep(as.Date(colnames(camOp)), pattern = "01$")
+  label.tmp <- format(as.Date(colnames(camOp))[which.tmp], "%Y-%m")
+  at.tmp <- which.tmp / ncol(camOp)
+  
+  image(t(as.matrix(camOp)), xaxt = "n", yaxt = "n", col = c("red", "grey70"))
+  axis(1, at = at.tmp, labels = label.tmp)
+  axis(2, at = seq(from = 0, to = 1, length.out = nrow(camOp)), labels = rownames(camOp), las = 1)
+  abline(v = at.tmp, col = rgb(0,0,0, 0.2))
+  box()
+}  
+
+camopPlot(camOp = camop_problem)
+
+## saving and loading camera operation matrics 
+#  - set 'writecsv = TRUE', 'check.names = FALSE' and define 'outdir'
+
+#  - when loading back in to R, need to tell R to use station IDs (first column) as row names: 
+camOp <- read.csv(file = .., row.names = 1, check.names = FALSE)
+
+
+#######################################################################
+## Image data extraction
+#######################################################################
+
+## tabulating species records 
+recordTable()  
+
+# load sample record table
+data(recordTableSample)
+head(recordTableSample)
+
+# NOTE: this file (recordTable) is used in all subsequent analyses, but generated from folders of raw images; use code MSP_formatting_for_camtrapR.R to generate recordTable from Snapshot output 
+recordTableSnapshot <- read.csv("recordTable.csv")
+head(recordTableSnapshot)
+# NOTE: did not include directory or file name info -- hopefully shouldn't affect other analyses 
+
+# NOTE: these record tables do not include counts of individuals 
+
+
+#######################################################################
+## 4) Data exploration 
+#######################################################################
+
+# load camera trap station table
+data(camtraps)  #sample
+camtraps_snapshot <- read.csv("camtraps_snapshot.csv") #ours 
+
+# load record table
+data(recordTableSample) #sample
+recordTableSnapshot <- read.csv("recordTable.csv") #ours 
+
+###########################
+## species presence maps ## 
+###########################
+
+#  - generates maps of observed species richness and species detections by station
+#  -  record table produced by 'recordTable' and camera trap station table as input
+
+## number of observed species 
+Mapstest1 <- detectionMaps(CTtable = camtraps, 
+                           recordTable = recordTableSample,
+                           Xcol = "utm_x",
+                           Ycol = "utm_y",
+                           stationCol = "Station",
+                           speciesCol = "Species",
+                           printLabels = TRUE,
+                           richnessPlot = TRUE, 
+                           speciesPlot = FALSE,
+                           addLegend = TRUE)
+
+Mapstest1.snap <- detectionMaps(CTtable = camtraps_snapshot, 
+                           recordTable = recordTableSnapshot,
+                           Xcol = "utm_x",
+                           Ycol = "utm_y",
+                           stationCol = "Station",
+                           speciesCol = "Species",
+                           printLabels = TRUE,
+                           richnessPlot = TRUE, 
+                           speciesPlot = FALSE,
+                           addLegend = TRUE)
+
+
+## number of records by species 
+recordTableSample_PBE <- recordTableSample[recordTableSample$Species == "PBE",]
+recordTableSnapshot_ZEB <- recordTableSnapshot[recordTableSnapshot$Species == "zebra",]
+
+Mapstest2 <- detectionMaps(CTtable = camtraps, 
+                           recordTable = recordTableSample_PBE,
+                           Xcol = "utm_x",
+                           Ycol = "utm_y",
+                           stationCol = "Station",
+                           speciesCol = "Species",
+                           speciesToShow = "PBE",
+                           printLabels = TRUE,
+                           richnessPlot = FALSE, 
+                           speciesPlot = TRUE,
+                           addLegend = TRUE)
+
+Mapstest2.snap <- detectionMaps(CTtable = camtraps_snapshot, 
+                           recordTable = recordTableSnapshot_ZEB,
+                           Xcol = "utm_x",
+                           Ycol = "utm_y",
+                           stationCol = "Station",
+                           speciesCol = "Species",
+                           speciesToShow = "zebra",
+                           printLabels = TRUE,
+                           richnessPlot = FALSE, 
+                           speciesPlot = TRUE,
+                           addLegend = TRUE)
+
+# (here, subsetted data to a single species - if did not and did not add the arguement 'speciesToShow', would produce maps for all species)
+
+
+## shapefiles  
+
+#   - can write these maps to shapefiles for import into GIS programs
+#   - resulting shapefile will show stations as point features with coordinates, total species number and number of observations per species in the attribute table
+#   - shapefile attribute table is identical to the resulting data.frame of the detectionMaps function
+
+library(rgdal)
+library(sp)
+
+# define shapefilename
+shapefileName <- "recordShapefileTest"
+shapefileProjection <- "+proj=utm +zone=50 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+shapefileProjectionSnap <- "+proj=utm +zone=36 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+
+# run detectionMaps with shapefile creation
+Mapstest3 <- detectionMaps(CTtable = camtraps,
+                           recordTable = recordTableSample,
+                           Xcol = "utm_x",
+                           Ycol = "utm_y",
+                           stationCol = "Station",
+                           speciesCol = "Species",
+                           richnessPlot = FALSE, # no richness plot
+                           speciesPlots = FALSE, # no species plots
+                           writeShapefile = TRUE, # but shaepfile creation
+                           shapefileName = shapefileName,
+                           shapefileDirectory = tempdir(), # change in own script  
+                           shapefileProjection = shapefileProjection)
+
+Mapstest3.snap <- detectionMaps(CTtable = camtraps_snapshot,
+                           recordTable = recordTableSnapshot,
+                           Xcol = "utm_x",
+                           Ycol = "utm_y",
+                           stationCol = "Station",
+                           speciesCol = "Species",
+                           richnessPlot = FALSE, # no richness plot
+                           speciesPlots = FALSE, # no species plots
+                           writeShapefile = TRUE, # but shaepfile creation
+                           shapefileName = shapefileName,
+                           shapefileDirectory = tempdir(), # change in own script  
+                           shapefileProjection = shapefileProjectionSnap)
+
+# check for the files that were created
+list.files(tempdir(), pattern=shapefileName)
+
+# load as shapefile
+shapefileTest <- readOGR(dsn=tempdir(), layer=shapefileName)
+
+# take look at attribute table
+shapefileTest@data
+
+
+## turning maps to SpatialPointsDataFrames 
+#  - used for spatial analyses and queries in R (e.g., extracting data from raster layers)
+
+# turn to spdf 
+detections_spdf <- SpatialPointsDataFrame(coords=Mapstest3[,c("utm_x", "utm_y")],
+                                          data = Mapstest3,
+                                          proj4string=CRS(shapefileProject))
+str(detections_spdf)
+
+# create sample raster 
+library(raster)
+raster_test <- raster(x=extend(extend(detections_spdf), y=500), nrows=10, ncols=10)
+values(raster_test) <- rpois(n=100, lambda=seq(1,100))
+
+# plot raster
+plot(raster_test, 
+     main = "some raster with camera trap stations",
+     ylab = "UTM N",
+     xlab = "UTM E")
+
+# add points to plot 
+points(detections_spdf, pch=16)
+
+# add point labels 
+text(x = coordinates(detections_spdf)[,1],
+     y = coordinates(detections_spdf)[,2],
+     labels = detections_spdf$Station,
+     pos = 1)
+
+# extract raster values at points and add to attributes
+detections_spdf$raster_value <- extract(x = raster_test, y = detections_spdf)
+
+# check attributes table 
+detections_spdf@data 
+
+
+#######################################
+## visualising species activity data ##
+#######################################
+
+#  - using time of day records ignoring date
+#  - all plots can be saved by setting argument 'writePNG = TRUE'
+
+## single-species activity plots
+#   - can plot activity of one focal species (set argument 'allSpecies=FALSE') or of all recorded species at once (set argument 'allSpecies=TRUE')
+#   - can be plotted three different ways 
+
+# pick a species for activity trials 
+species4activity <- "PBE"
+species4activity.snap <- "zebra"
+
+# 1) kernel density estimation (from 'overlap' package)
+activityDensity(recordTable = recordTableSample,
+                species = species4activity)
+activityDensity(recordTable = recordTableSnapshot,
+                species = species4activity.snap)
+
+# 2) histogram with hourly intervals
+activityHistogram(recordTable = recordTableSample, 
+                  species = species4activity)
+activityHistogram(recordTable = recordTableSnapshot, 
+                  species = species4activity.snap)
+
+# 3) radial plot (from 'plotrix')
+activityRadial(recordTable = recordTableSample,
+               species = species4activity,
+               lwd = 3) #line width 
+activityRadial(recordTable = recordTableSnapshot,
+               species = species4activity.snap,
+               lwd = 3)
+
+# --> if want polygons instead of radial lines: 
+activityRadial(recordTable = recordTableSample,
+               species = species4activity,
+               allSpecies = FALSE,
+               speciesCol = "Species",
+               recordDateTimeCol = "DateTimeOriginal",
+               plotR = TRUE,
+               writePNG = FALSE,
+               lwd = 3,
+               rp.type = "p") #plot type = polygon
+activityRadial(recordTable = recordTableSnapshot,
+               species = species4activity.snap,
+               allSpecies = FALSE,
+               speciesCol = "Species",
+               recordDateTimeCol = "DateTimeOriginal",
+               plotR = TRUE,
+               writePNG = FALSE,
+               lwd = 3,
+               rp.type = "p") #plot type = polygon
+
+
+
+## two-species activity plots 
+#   - uses kernel density estimation overalp (from 'overlap' package)
+#   - usees Dhat1 overlap coefficient 
+
+# define species of interest
+speciesA_for_activity <- "VTA"
+speciesB_for_activity <- "PBE"
+
+# create activity overlap plot 
+activityOverlap(recordTable = recordTableSample,
+                speciesA = speciesA_for_activity,
+                speciesB = speciesB_for_activity,
+                writePNG = FALSE,
+                plotR = TRUE,
+                linecol = c("red", "blue"),
+                linewidth = c(3,3),
+                add.rug = TRUE)  
+
+
+#######################################################################
+## 5) Data export
+#######################################################################
+
+############################
+## survey summary reports ##
+############################
+
+# creates summary report containing:
+#  - number of stations (total and operational)
+#  - number of active trap days (total and by station)
+#  - number of days with cameras set up (operational or not; total and by station)
+#  - total trapping period
+#  - camera trap and record date ranges
+#  - number of species by station
+#  - number of independent events by species
+#  - number of stations at which species were recorded 
+#  - number of independent events by station and species
+
+reportTest <- surveyReport(recordTable = recordTableSample,
+                           CTtable = camtraps,
+                           speciesCol = "Species",
+                           stationCol = "Station",
+                           setupCol = "Setup_date",
+                           retrievalCol = "Retrieval_date",
+                           CTDateFormat = "%d/%m/%Y",
+                           recordDateTimeCol = "DateTimeOriginal",
+                           recordDateTimeFormat = "%Y-%m-%d %H:%M:%S",
+                           CTHasProblems = TRUE)      
+
+reportTest <- surveyReport(recordTable = recordTableSnapshot,
+                           CTtable = camtraps_snapshot,
+                           speciesCol = "Species",
+                           stationCol = "Station",
+                           setupCol = "Setup_date",
+                           retrievalCol = "Retrieval_date",
+                           CTDateFormat = "%Y-%m-%d",
+                           recordDateTimeCol = "DateTimeOriginal",
+                           recordDateTimeFormat = "%Y-%m-%d %H:%M:%S",
+                           CTHasProblems = TRUE)      
+
+#  - 'CTHasProblems' argument tells camtrapR to look for columns specifying periods of malfunctioning in CTable (e.g., 'Problem1_from' and 'Problem1_to')
+#  - if there is more than one camera per station, argument 'cameraCol' specifies the column containing camera IDs; not setting with cause camtrapR to assume one camera per station
+#  - set 'sinkpath' to directory in which function can save output as txt file
+
+# --> this shows basic information in the console, but more stored in the object
+
+str(reportTest)
+# list elements can be accessed individually: 
+
+# output of surveyReport
+reportTest[[1]]
+
+# number of species by station
+reportTest[[2]]
+
+# number of events and number of stations by species
+reportTest[[3]]
+
+# number of species events by station 
+reportTest[[4]]
+# (reportTest[[5]] identical to reportTest[[4]] except contains species with n_events=0)
+
+
+###################################
+## input for subsequent analyses ##
+###################################
+
+## occupancy analyses 
+#  - use detection/non-detection matrices in which for every station and every occasion “1”" signifies a detection of a given species and “0”" signifies non-detecion
+
+# create camera operation matrix 
+camop_no_problem <- cameraOperation(CTtable = camtraps,
+                                    stationCol = "Station",
+                                    setupCol = "Setup_date",
+                                    retrievalCol = "Retrieval_date",
+                                    hasProblems = FALSE,
+                                    dateFormat = "%d/%m/%Y")
+
+camop_no_problem.snap <- cameraOperation(CTtable = camtraps_snapshot,
+                                    stationCol = "Station",
+                                    setupCol = "Setup_date",
+                                    retrievalCol = "Retrieval_date",
+                                    hasProblems = FALSE,
+                                    dateFormat = "%Y-%m-%d")
+
+# load record table
+data(recordTableSample) #sample
+recordTableSnapshot <- read.csv("recordTable.csv") #ours 
+
+# make detection history (without trapping effort)
+DetHist1 <- detectionHistory(recordTable = recordTableSample, 
+                             camOp = camop_no_problem,
+                             stationCol = "Station",
+                             speciesCol = "Species",
+                             recordDateTimeCol = "DateTimeOriginal",
+                             species = "VTA",
+                             occasionLength = 7,
+                             day1 = "station", 
+                             includeEffort = FALSE)   
+DetHist1
+
+DetHist1.snap <- detectionHistory(recordTable = recordTableSnapshot, 
+                             camOp = camop_no_problem.snap,
+                             stationCol = "Station",
+                             speciesCol = "Species",
+                             recordDateTimeCol = "DateTimeOriginal",
+                             species = "zebra",
+                             occasionLength = 7,
+                             day1 = "station", 
+                             includeEffort = FALSE)   
+DetHist1
+
+# make detection history (with trapping effort)
+DetHist2 <- detectionHistory(recordTable = recordTableSample,
+                             camOp = camop_no_problem,
+                             stationCol = "Station",
+                             speciesCol = "Species",
+                             recordDateTimeCol = "DateTimeOriginal",
+                             species = "VTA",
+                             timeZone = "Asia/Kuala_Lumpur",
+                             occasionLength = 7,
+                             day1 = "station",
+                             includeEffort = TRUE,
+                             scaleEffort = FALSE)
+DetHist2[[1]] # detection history 
+DetHist2[[2]] # effort (in days per occasion)
+
+# to help with convergence of models, effort matrix can be scaled to mean = 0 and sd = 1 by setting 'scaleEffort = TRUE'; if 'writecsv = TRUE', the scaling parameters will als be saved in a separate csv fiel 
+DetHist3 <- detectionHistory(recordTable = recordTableSample,
+                             camOp = camop_no_problem,
+                             stationCol = "Station",
+                             speciesCol = "Species",
+                             recordDateTimeCol = "DateTimeOriginal",
+                             species = "VTA",
+                             timeZone = "Asia/Kuala_Lumpur",
+                             occasionLength = 7,
+                             day1 = "station",
+                             includeEffort = TRUE,
+                             scaleEffort = TRUE)
+DetHist3[[2]]  # effort (scaled)
+DetHist3[[3]]  # scaling parameters for back-transformation
+
+# backtransform scaled effort like this if needed:
+(DetHist3[[2]] * DetHist3[[3]]$effort.scaled.scale) + DetHist3[[3]]$effort.scaled.center
+
+# detection history and effort matrics can be saved as csv files by setting 'writecsv = TRUE' and defining the 'outdir'
+# in order to load csv in to R again, need to tell R to use station IDs as row names: 
+detHist <- read.csv(file = ..., row.names = 1)
+effort <- read.csv(file = ..., row.names = 1)
+
+
+## spatial capture-recapture analyses
+#  - output can be counts (number of individual detections per occasion, 'output = "count") or binary (was an individual detected during an occasion, argument 'output = "binary")
+
+data(recordTableIndividualSample)
+data(camtraps)
+
+# create camera operation matrix (with problems/malfunction)
+camop_problem <- cameraOperation(CTtable = camtraps,
+                                 stationCol = "Station",
+                                 setupCol = "Setup_date",
+                                 retrievalCol = "Retrieval_date",
+                                 writecsv = FALSE,
+                                 hasProblems = TRUE,
+                                 dateFormat = "%d/%m%/%Y")
+
+sdh <- spatialDetectionHistory(recordTableIndividual = recordTableIndividualSample,
+                               species               = "LeopardCat",  
+                               output                = "binary",
+                               camOp                 = camop_problem, 
+                               CTtable               = camtraps,
+                               stationCol            = "Station", 
+                               speciesCol            = "Species",
+                               Xcol                  = "utm_x",
+                               Ycol                  = "utm_y",
+                               individualCol         = "Individual",
+                               recordDateTimeCol     = "DateTimeOriginal",
+                               recordDateTimeFormat  = "%Y-%m-%d %H:%M:%S",
+                               occasionLength        = 10, 
+                               day1                  = "survey",
+                               includeEffort         = TRUE,
+                               timeZone              = "Asia/Kuala_Lumpur")
+summary(sdh)
+plot(sdh, tracks = TRUE)
+
+spatialDetectionHistory() #detection histories of individuals for spatial capture-recapture analyses
