@@ -1,0 +1,188 @@
+##########################################
+## Mixed Modelling for Camera Trap Data ##
+##########################################
+
+# Generalized Linear Models
+# Generalized Additive Models
+# Generalized Estimating Equations 
+
+##########################################
+
+## Makes presence/absence data in hourly increments for species of interest 
+
+## set workspace
+setwd("C:/Users/palme516/Desktop/Grad School/Papers/Paper_LunarCycle/Lunar_May")
+rm(list=ls())
+library(doBy); library(plyr); library(chron); library(lubridate)
+
+##load data
+dat <- read.csv("Databases_Prepped/U1-6_NIGHT.csv") #here, using only nocturnal data; could use all data 
+dat$DateTime <- strptime(dat$DateTime, "%Y-%m-%d %H:%M:%S")
+
+## load search effort data 
+df <- read.csv("Lunar_Nov/Databases_Raw/search_effort.csv") #this is already expanded to have a row for each day each camera trap active 
+
+## select species of interest
+spp <- c("wildebeest", "gazelleThomsons", "zebra", "buffalo") 
+
+## subset data by species of interest 
+sppdat <- list() #list to hold all individual species data frames
+for (i in 1:length(spp)){
+  sppdat[[i]] <- dat[dat$Species == spp[i],]
+  sppdat[[i]]$hourly <- as.character(round_date(sppdat[[i]]$DateTime, "hour"))
+}
+
+## summarize data by ABUNDANCE = total counts of unique animals in photographs 
+abunddat <- list() #list to hold all individual species data frames 
+for(i in 1:length(sppdat)){
+  
+  datsum <- summaryBy(Count ~ SiteID + hourly, data=sppdat[[i]], FUN=sum)
+  datsum$SiteID <- as.character(datsum$SiteID)
+  z <- join(df, datsum)
+  z[is.na(z)] <- 0
+  z$species <- rep(spp[i], nrow(z))
+  names(z)[4] <- "abundance"
+  z <- z[,c(5,2,3,4,1)]
+  
+  abunddat[[i]] <- z
+}
+
+
+## if wanted to add covariates, do so in following way (here, covariate df is "risetime")
+for(i in 1:length(sppdat)){
+  abunddat[[i]] <- join(abunddat[[i]], risetime, type="left")
+}
+
+# NOTE: be sure to center and rescale all covariate values *first* (essential for modelling), e.g.,
+cov$treedensity <- scale(cov$treedensity)
+
+write.csv(abunddat[[j]], paste(abunddat[[j]]$species[1], "_hourly.csv", sep=""), row.names=F)
+
+
+##############################################################
+## GLMMs ##
+##############################################################
+
+## set workspace 
+rm(list=ls())
+setwd("C:/Users/palme516/Desktop/Grad School/Papers/Paper_Lunar Cycle/Lunar_May/Databases_Prepped")
+library(mgcv); library(lme4); library(plyr); library(nlme); 
+library(Hmisc); library(effects); library(MASS)
+
+## load and format data 
+dat <- read.csv("Hourly_Cov/hourly_gazelleThomsons_cov.csv") #same as above "gazelleThomsons_hourly.csv"
+dat$hourly <- strptime(dat$hourly, "%Y-%m-%d %H:%M:%S")
+mintime <- min(dat$hourly, na.rm=T)
+dat$Time <- dat$hourly - mintime
+dat$hourly <- as.character(dat$hourly)
+dat$date <- as.character(dat$date) 
+dat$binHab <- as.factor(dat$binHab) 
+dat$up.down <- factor(dat$up.down)
+dat <- dat[complete.cases(dat),]
+dat <- dat[!duplicated(dat),]
+
+# NOTE: if want to not use whole data frame (with 0s for absenses), remove and use an offset instead:
+dat <- dat[dat$abundance > 0,]
+dat$offset <- log(dat$NightAct) 
+
+## modelling 
+
+#glmmPQL 
+m1.a <- glmmPQL(abundance ~ frxn + up.down + encountrisk + killrisk + NDVI + binHab +  #fixed effects
+                  encountrisk * frxn + killrisk * frxn + NDVI * frxn #+offset(offset), #interactions
+                random = ~ 1 | SiteID,                                                 #random effects
+                correlation = corCAR1(form=~Time|SiteID),                              #error structure 
+                control=glmerControl(optimizer="bobyqa", optCtrl=list(maxfun=2e5)),    #optimizer 
+                family = negbin(1), data = dat[dat$season == "Wet Season",])           #distribution, data 
+
+write.csv(summary(m1.a)$coefficients, "Abund.Wet.Gazelle_Coeff.csv", row.names=F)
+
+#glmer
+m1.b <- glmer(abundance ~ frxn + up.down + encountrisk + killrisk +  NDVI + binHab + 
+                encountrisk * frxn + killrisk * frxn + NDVI * frxn #+ offset(offset), 
+              random = ~ 1 | SiteID, 
+              correlation = corCAR1(form=~Time|SiteID),
+              control=glmerControl(optimizer="bobyqa", optCtrl=list(maxfun=2e5)),
+              family = negbin(1), data = dat[dat$season == "Dry Season",])
+
+write.csv(summary(m1.b)$coefficients, "Abund.Dry.Gazelle_Coeff.csv", row.names=F)
+
+## saving interaction effects 
+write.csv(as.data.frame(effect("frxn:killrisk",m1.a)), "Abund.Wet.Gazelle_Effect_KF.csv", row.names=F)
+write.csv(as.data.frame(effect("frxn:encountrisk",m1.a)), "Abund.Wet.Gazelle_Effect_EF.csv", row.names=F)
+write.csv(as.data.frame(effect("frxn:NDVI",m1.a)), "Abund.Wet.Gazelle_Effect_NF.csv", row.names=F)
+
+write.csv(as.data.frame(effect("frxn:killrisk",m1.b)), "Abund.Dry.Gazelle_Effect_KF.csv", row.names=F)
+write.csv(as.data.frame(effect("frxn:encountrisk",m1.b)), "Abund.Dry.Gazelle_Effect_EF.csv", row.names=F)
+write.csv(as.data.frame(effect("frxn:NDVI",m1.b)), "Abund.Dry.Gazelle_Effect_NF.csv", row.names=F)
+
+# plotting interaction effects 
+spp <- "Gazelle"
+season <- "Wet"
+dat <- read.csv(paste("Abund", season, "_", spp, "_Effect_KF_1.csv", sep="")) #change as needed 
+names(dat)[2] <- "Kill Risk" #rename column
+(p1 <- ggplot(dat, aes(frxn, fit, color=`Kill Risk`, group=`Kill Risk`)) + 
+    geom_point() + geom_line() +
+    scale_color_gradient(low="darkorange", high="yellow") +
+    theme_bw(base_size=12) + 
+    xlab("") + ylab("Change in Abundance") + 
+    ggtitle(paste("(A)", spp, season, "Season")) +
+    theme(legend.position="none", plot.title=element_text(size=12)))
+
+
+
+##############################################################
+## GAMM ## 
+##############################################################
+
+# set workspace 
+rm(list=ls())
+setwd("C:/Users/palme516/Desktop/Grad School/Papers/Paper_Lunar Cycle/Lunar_May/Databases_Prepped")
+library(mgcv); library(lme4); library(plyr)
+
+# load and format data 
+dat <- read.csv(paste("Hourly_Cov/hourly_",species,"_cov.csv", sep="")) 
+dat$hourly <- as.character(dat$hourly)
+dat$date <- as.character(dat$date) 
+dat$binHab <- as.factor(dat$binHab) 
+
+# models
+m1 <- gamm(abundance ~ s(newmoon, bs="cc", k=20) + up.down + 
+             encountrisk + killrisk + NDVI + 
+             encountrisk * killrisk + 
+             encountrisk * killrisk * NDVI + 
+             season + binHab,
+           random=list(SiteID=~1), family = negbin(1), data = dat)
+AIC(m1$lme)
+summary(m1$lme)
+summary(m1$gam)
+
+
+
+##############################################################
+## GEE ## 
+##############################################################
+
+rm(list=ls())
+setwd("C:/Users/palme516/Desktop/Grad School/Papers/Paper_LunarCycle/Lunar_May/Databases_Prepped")
+library(Hmisc); library(effects); library(geepack); library(gee)
+
+# load data 
+dat <- read.csv("../Hourly_Cov/hourly_buffalo_cov.csv")
+dat$hourly <- strptime(dat$hourly, "%Y-%m-%d %H:%M:%S")
+mintime <- min(dat$hourly, na.rm=T)
+dat$Time <- dat$hourly - mintime
+dat$hourly <- as.character(dat$hourly)
+dat$date <- as.character(dat$date) 
+dat$binHab <- as.factor(dat$binHab) 
+dat$up.down <- factor(dat$up.down)
+dat <- dat[complete.cases(dat),]
+dat <- dat[!duplicated(dat),]
+
+# modelling 
+geefit.ar <- geeglm(abundance ~ frxn + up.down + encountrisk + killrisk + NDVI + binHab + #fixed effects
+                      encountrisk * frxn + killrisk * frxn + NDVI * frxn, #interaction terms  
+                    id=SiteID, #define grouping variable/random effect 
+                    family=negbin(1), #define family
+                    corstr="ar1", #define error structure 
+                    data=dat)
