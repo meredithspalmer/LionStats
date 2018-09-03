@@ -1,0 +1,149 @@
+## SOURCE: https://sites.google.com/site/asrworkshop/home/schedule/r-occupancy-1
+## NEED TO UPDATE FOR OWN DATA
+
+##########################################
+## Occupancy Analyses for Snapshot Data ##
+##########################################
+
+library(unmarked)
+
+# For an occupancy analysis, the input data will fall into 3 categories:
+
+# 1) Detection histories in which the rows of the data will usually be sites and the columns will represent detection occasions or other units of replication,
+
+# 2) Site-specific covariates, which are attributes measured on each of the sites that potentially explain site-to-site variability in detection and/or occupancy 
+
+# 3) Sample-specific or "observation level" covariates, which are attributes measures at each of the sample occasions (replicates) 
+
+# Sample data: Data for Blue Grosbeaks (Guiraca caerulea) on 41 old fields planted to longleaf pines (Pinus palustris) in southern Georgia, USA.  Surveys were 500 m transects across each field and were completed three times during the breeding season in 2001. The first column (which is optional) is a label for each site, simple numbered 1 - 41.  The next 3 columns are the detection histories for each site on each of 3 occasions during the 2001 breeding season
+
+## Load and format data 
+
+setwd("C:/Users/palme516/Desktop/Grad School/Teaching/2018_Camera Trapping Workshop")
+rm(list=ls())
+library(unmarked)
+
+data <- read.csv("blgr.csv")
+head(data)
+
+# Detection data rows are sites columns are detection replicates
+y <- data[,2:4] #contains just detection histories 
+n <- nrow(data) #counter to use for dimensioning other parts of data
+
+# Site-specific covariates
+blgr.site <- data[,5:9]
+
+# To test for time-specfic variation in detection, create a time variable that behaviors like a factor (rather than a numerical value)
+(time <- as.factor(rep(c(1,2,3),n)))
+blgr.obs <- data.frame(time)
+
+# Put detection histories and covariates together in unmarked data frame
+blgr <- unmarkedFrameOccu(y=y, siteCovs=blgr.site, obsCovs=blgr.obs)
+summary(blgr)
+# - NOTE: covariates are not required if fittng a simple occupancy model (e.g.:
+#         blgr <- unmarkedFrameOccu(y=y)
+
+
+## Basic model: homogeneous detection and occupancy 
+# single-season models run using function occu()
+# syntax: model <- occu(~detection_formula ~occupancy_formula, dataframe)
+#   - detection and occupancy formulas in form of generalized linear models 
+#   - NOTE: detection and occupancy modelled using logit transformation,  so have to backtrasnform (inverse logit aka expit) transformation before using)  
+
+# for no time, no covariate effects: 
+
+fm1 <- occu(~1 ~1, blgr)
+fm1
+backTransform(fm1, 'det') #backtransform estimates to original scale; detection
+backTransform(fm1, "state") #backtransform estimates to original scale; occupancy
+
+# create empirical Bayes estimate of proportion of sites occupied + confidence intervals 
+s <- nrow(y)
+re <- ranef(fm1)
+EBUP <- bup(re, stat="mode")
+CI <- confint(re, level=0.95)
+rbind(s_occup = c(Estimate = sum(EBUP), colSums(CI))) #95% EB interval on number of sites occupied
+brind(PAO = c(Estimate = sum(EBUP), solSums(CI))/s) #95% EB interval on proportion of sites occupied
+
+# NOTE: if you compare this statistic to the back-tranformed estimate of psi you'll notice it is somewhat lower.  Conceptually this represents the proportion of the finite sample (41 in this case) of sites occupied, whereas psi estimates the probability of occupancy from an infinite list of sites.
+
+
+## Adding covariates to detection and occupancy modelling 
+# five example models with different combos of detection and occupancy covariates:
+
+fm2 <- occu(~time ~1, blgr) #time-specific detection, constant occupancy 
+fm3 <- occu(~1 ~bqi, blgr) #constant detection, occupancy predicted by bqi
+fm4 <- occu(~time ~bqi, blgr) #time-specific detection, occupancy predicted by bqi
+fm5 <- occu(~1 ~log(field.size), blgr) #constant detection, occupancy predicted by log(field size)
+fm6 <- occu(~1 ~log(field.size)+bqi, blgr) #constant detection, occupancy predicted by log(field size) + bqi
+
+# summarize and compare models 
+fmlist <- fitList(p_dot_psi_dot = fm1, p_t_psi_t = fm2, p_dot_psi_bqi=fm3, p_t_psi_bqi=fm4, p_dot_psi_field=fm5, p_dot_psi_field_bqi=fm6)
+
+modSel(fmlist) #ranked list of models and AIC
+
+# NOTE: Again, these estimates are on the logit scale. You can obtain real-scale estimates via the backTransform() function, but when covariates are present you will need to specifiy a value for the covariates for use in the linear function that predicts p or psi... 
+
+# What we are going to do instead is take a model averaging approach that has basically these steps:
+#  1) We specify a quantity that we are trying to predict for each model (e.g., psi)
+#  2) We specify a value or range of values for the covariates; often these will be averages over the data but they can be any value
+#  3) We generate predictions under each model and compute a weighted average where the weights are the AIC weights
+#  4) We compute standard error and confidence interval on the linear scale
+#  5) We transform the the estimate and CI to the real (probability scale)
+
+
+## Multi-model comparison and model averaging 
+
+# create list of labels so that models can be recognized in the output
+labels <- c("p(.)psi(.)","p(t)psi(.)","p(.)psi(bqi)","p(.)psi(field)","p(.)psi(field+bqi)")
+
+# construct list of AIC values under each model, using same order as model labels
+aic<-c(fm1@AIC,fm2@AIC,fm3@AIC,fm4@AIC,fm5@AIC,fm6@AIC)
+
+# use occup() objects created above to create set of linear predictions, one under each model. Chose prediction given a) average field size and b) absense of bqi (0). Note that levels of bqi or field size are only needed when that factor is present in the model 
+
+# logit scale predictions for psi under each model
+lc1<-linearComb(fm1, c(1), type="state")
+lc2<-linearComb(fm2, c(1), type="state")
+lc3<-linearComb(fm3, c(1, 0), type="state")
+lc4 <- linearComb(fm4, c(1, 0), type="state")
+lc5 <- linearComb(fm5, c(1, log(mean(blgr@siteCovs$field.size))), type="state")
+lc6 <- linearComb(fm6, c(1, log(mean(blgr@siteCovs$field.size)) ,0), type="state")
+
+# predictions under each model 
+predictions <- c(lc1@estimate,lc2@estimate,lc3@estimate,lc4@estimate,lc5@estimate,lc6@estimate)
+se_predictions <- sqrt(c(lc1@covMat,lc2@covMat,lc3@covMat,lc4@covMat,lc5@covMat,lc6@covMat))
+
+# create ordered table of aic wts and predictions 
+my_aic<-function(labels,aic,predictions,se_predictions){
+  delta<-aic-min(aic)
+  wt<-exp(-delta*0.5)
+  wt<-wt/sum(wt)
+  wt
+  output<-cbind(aic,delta,wt,predictions,se_predictions)
+  output<-data.frame(AIC=aic,Delta=delta,ModWt=wt,Prediction=predictions,SE_prediction=se_predictions)
+  output[order(aic) , ]
+ }
+aic_mods<-my_aic(labels=labels, aic=aic, predictions=predictions, se_predictions=se_predictions)
+aic_mods
+
+# conduct model averaging and back-transform to the occupancy scale 
+mod_avg<-function(mods){
+  #user defined inverse logit function
+  expit<-function(x){1/(1+exp(-x))}
+  wt<-mods$ModWt
+  est<-mods$Prediction
+  se<-mods$Se_prediction
+  #compute model averaged estimat
+   wtd<-est*wt
+   mavg<-sum(wtd)
+   #compute unconditional se
+   #step 1 components of variation under each model
+   uncond_se<-sum(wt*sqrt((est-mavg)^2+se^2))
+   est<-expit(mavg)
+   ci<-c(mavg-qnorm(1-0.025)*uncond_se,mavg+qnorm(1-0.025)*uncond_se)
+   ci<-expit(ci)
+   return(data.frame(ModAvEst=est,Lower=ci[1],Upper=ci[2]))
+}
+
+mod_avg(aic_mods)
