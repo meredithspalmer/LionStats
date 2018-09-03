@@ -1,0 +1,72 @@
+##############################
+## Analyses of Biodiversity ## 
+##############################
+
+rm(list=ls())
+library(vegan)
+data(BCI)
+View(BCI) #is every row a different site?? 
+
+# NOTE: if want to explore these indices, come up with code to transform CT data into vegan-appropriate data
+
+
+## Diversity indices 
+
+(H <- diversity(BCI)) #finds Shannon diversity indices for all sites 
+(J <- H/log(specnumber(BCI))) #finds Pielou's evenness index for all sites
+(R <- renyi(BCI[sample(nrow(BCI),6),])) #Renyi's diversities for a random subset of six sites (higher Renyi diversities = more diverse site)
+plot(R) #plot Renyi's diversities for six sites 
+(alpha <- fisher.alpha(BCI)) #Fisher's log-series alpha for all sites
+
+
+## Rarefaction 
+
+# b/c species richness increases with sample size, and difs in richness actually might be caused by difs in sample size, solve problem by rarefying species richness to same number of individuals
+
+quantile(rowSums(BCI)) #number of stems per hectare within data set
+Srar <- rarefyl(BCI, min(rowSums(BCI))) #richness for same number of individuals
+
+
+## Species abundance models 
+
+# fisher's log-series model
+k <- sample(nrow(BCI),1) #randomly select a plot 
+(fish <- fisherfit(BCI[k,]))
+confint(fish)
+
+# preston's log-normal model 
+# main challenger to Fisher's log-series - instead of plotting species by frequencies, it bins species into frequency classes of increasing sizes
+prestondistr(BCI[k,])
+
+
+## Ranked abundance distribution 
+# alternative approach to species abundance distribution is to plot logarithmic abundances in decreasing order, or against ranks of species
+(rad <- radfit(BCI[k,]))
+
+
+## Species accumulation models 
+# study accumulation of species when number of sites increases (similar to rarefaction)
+sac <- specaccum(BCI) #Kindt's exact method 
+plot(sac, ci.type="polygon", ci.col="yellow")
+
+
+## Beta diversity
+# = diversity along gradients (measure of general heterogeneity: how many more species do you have in a collection of sites compared to an average site?) 
+(S <- ncol(BCI)/mean(specnumber(BCI)) - 1)
+
+# alternative - Sorensen index of dissimilarity (to deal with S increasing with number of sites)
+beta <- vegdist(BCI, binary=TRUE)
+mean(beta)
+
+# more alternatives - all commonly used indices can be found using betadiver()
+betadiver(help=TRUE)
+z <- betadiver(BCI, "z") #for example
+quantile(z)
+
+
+## Species pool 
+# number of unseen species (extrapolate species richness)
+
+specpool(BCI) #studies a collection of sites
+
+estimateR(BCI[k,]) #works with counts of individuals,  can be used with a single site
